@@ -4,8 +4,8 @@ pydantic
 supabase
 pydantic-settings
 google-generativeai
-praw
 google-play-scraper
 app-store-scraper
 langdetect
 python-dotenv
+requests
