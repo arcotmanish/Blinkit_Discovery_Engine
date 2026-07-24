@@ -3,7 +3,7 @@ uvicorn
 pydantic
 supabase
 pydantic-settings
-google-generativeai
+google-genai
 google-play-scraper
 app-store-scraper
 langdetect
