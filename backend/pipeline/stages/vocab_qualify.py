@@ -57,8 +57,8 @@ class BehaviourVocabulary:
                     self.objects.add(item)
 
 # Instantiate once when module is loaded (app startup)
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-VOCAB_FILE = os.path.join(_PROJECT_ROOT, "Antigravity_Runtime_Vocabulary_v1.md")
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+VOCAB_FILE = os.path.join(_BACKEND_ROOT, "Antigravity_Runtime_Vocabulary_v1.md")
 
 vocab = BehaviourVocabulary(VOCAB_FILE)
 

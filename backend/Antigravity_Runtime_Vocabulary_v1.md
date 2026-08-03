@@ -1,0 +1,204 @@
+# Antigravity Runtime Vocabulary v1
+
+phrase_weight: 5
+verb_weight: 2
+object_weight: 1
+
+## Phrases
+- abandoned purchase
+- adding next time
+- became routine
+- before buying
+- better option
+- better than before
+- bought once
+- buy every month
+- buy every week
+- came across
+- changed brand
+- checking options
+- comparing brands
+- considering options
+- continue buying
+- couldn't find
+- couldn't order
+- decided to try
+- didn't know Blinkit had
+- different choices
+- discovered here
+- exploring categories
+- finally ordered
+- first noticed
+- first order
+- first purchase
+- forgot to buy
+- found by chance
+- found on Blinkit
+- gave it a shot
+- gave up
+- go to purchase
+- going to order
+- hard to find
+- have to buy
+- instead of
+- intend to buy
+- keep ordering
+- looking around
+- looking for
+- missing item
+- moved from
+- need to buy
+- need urgently
+- new to me
+- next purchase
+- not available
+- noticed today
+- on my list
+- ordered again
+- ordered for the first time
+- out of stock
+- plan to buy
+- ran out
+- regular order
+- removed from cart
+- repeat purchase
+- replaced my usual
+- replaced old option
+- restocked again
+- running out
+- sampled it
+- saving for later
+- searching for
+- shifted to Blinkit
+- shopping around
+- started buying here
+- stopped buying elsewhere
+- stumbled upon
+- switched from
+- tested it
+- thinking of buying
+- time to restock
+- too expensive
+- trying alternatives
+- trying something new
+- want to try
+- wanted to buy
+- will order
+- worth exploring
+
+## Verbs
+- abandon
+- add
+- adopt
+- avoid
+- browse
+- buy
+- cancel
+- change
+- check
+- checkout
+- choose
+- compare
+- consider
+- continue
+- discover
+- drop
+- evaluate
+- experiment
+- explore
+- fail
+- filter
+- find
+- inspect
+- intend
+- keep
+- leave
+- locate
+- look
+- migrate
+- miss
+- move
+- need
+- notice
+- order
+- plan
+- prefer
+- purchase
+- remove
+- reorder
+- repeat
+- replace
+- require
+- restock
+- return
+- review
+- sample
+- save
+- search
+- see
+- shift
+- skip
+- spot
+- start
+- stop
+- subscribe
+- switch
+- test
+- try
+- use
+- want
+- wish
+
+## Objects
+- alternatives
+- app
+- availability
+- baby care
+- baby diapers
+- beverage
+- brand
+- brands
+- cart
+- cat litter
+- categories
+- combos
+- electronics
+- essentials
+- flavours
+- fruits
+- groceries
+- health product
+- household
+- item
+- listing
+- medicine
+- milk
+- monthly order
+- new brand
+- new category
+- new product
+- next order
+- next purchase
+- offers
+- options
+- packs
+- pet food
+- price
+- product
+- protein powder
+- rice
+- sample pack
+- seller
+- service
+- sizes
+- skincare
+- snack
+- stock
+- store
+- supplier
+- trial pack
+- variants
+- vegetables
+- vitamins
+- weekly order
+- wishlist
