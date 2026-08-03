@@ -1,1 +1,4 @@
-// Stub file for app/dashboard/opportunities/page.tsx
+// OpportunitiesPage - stub page
+export default function OpportunitiesPage() {
+  return null;
+}

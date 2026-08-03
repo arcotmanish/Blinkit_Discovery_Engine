@@ -1,1 +1,4 @@
-// Stub file for app/dashboard/behaviours/page.tsx
+// Behaviours page - redirects to main dashboard
+export default function BehavioursPage() {
+  return null;
+}

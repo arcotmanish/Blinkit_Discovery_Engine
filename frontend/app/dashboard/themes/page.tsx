@@ -1,1 +1,4 @@
-// Stub file for app/dashboard/themes/page.tsx
+// ThemesPage - stub page
+export default function ThemesPage() {
+  return null;
+}

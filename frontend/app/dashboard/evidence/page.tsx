@@ -1,1 +1,4 @@
-// Stub file for app/dashboard/evidence/page.tsx
+// EvidencePage - stub page
+export default function EvidencePage() {
+  return null;
+}
