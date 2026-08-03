@@ -11,7 +11,7 @@ WORKDIR /app
 
 # Setup Python Backend
 COPY backend/requirements.txt /app/backend/
-RUN pip3 install --break-system-packages -r /app/backend/requirements.txt
+RUN pip3 install -r /app/backend/requirements.txt
 COPY backend /app/backend
 
 # Setup Node.js Frontend
