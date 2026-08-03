@@ -8,7 +8,7 @@ client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 print('Client created. Calling API...')
 start = time.time()
 resp = client.models.generate_content(
-    model='gemini-2.0-flash-lite',
+    model='gemini-2.0-flash',
     contents='Return this exact JSON: {"status": "ok"}',
     config=types.GenerateContentConfig(response_mime_type='application/json', temperature=0.1)
 )

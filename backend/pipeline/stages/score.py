@@ -1,260 +1,202 @@
 """
-Stage 2: Signal Scoring Pipeline
+Stage 4: Signal Scoring
+=======================
+Pure aggregation — NO LLM calls. Reads chunk_annotations, computes
+frequency/percentage scores per signal dimension, then writes to
+the signal_scores table in Supabase.
 
-Hybrid approach:
-  Sub-stage A — Rule-based exclusion (fast, no LLM cost)
-  Sub-stage B — LLM batch scoring via Gemini 2.0 Flash (5 reviews per call)
-
-Rate limiting: asyncio.sleep(4) between batches → max ~15 RPM on free tier.
+Run standalone:  python pipeline/stages/score.py
 """
 
-import asyncio
-import sys
 import os
-import re
+import sys
+import json
+from collections import Counter
+from dotenv import load_dotenv
+from supabase import create_client
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+load_dotenv()
 
-from db.client import supabase
-from utils.llm import call_llm_async
-from pipeline.prompts.signal_scoring import build_scoring_prompt
-
-# ── Constants ──────────────────────────────────────────────────────────────────
-
-BATCH_SIZE = 5
-BATCH_DELAY_SECONDS = 4  # Keeps us safely under 15 RPM on free tier
-
-# Operational-only patterns (rule-based exclusion)
-OPERATIONAL_PATTERNS = [
-    r'\botp\b',
-    r'\bone.time.pass',
-    r'app.crash',
-    r'app.not.work',
-    r'app.is.not.open',
-    r'customer.support',
-    r'customer.care',
-    r'delivery.partner',
-    r'delivery.boy',
-    r'delivery.agent',
-    r'delivery.person',
-    r'payment.fail',
-    r'payment.not.work',
-    r'refund.not.receiv',
-    r'can.?t.log',
-    r'login.issue',
-    r'account.block',
-]
-
-# If these keywords appear, the review may still have behavioral signal
-BEHAVIORAL_KEYWORDS = [
-    r'\brepeat\b', r'\bregular\b', r'\balways\b', r'\busually\b',
-    r'\bswitch\b', r'\bcompare\b', r'\bprefer\b', r'\bchoose\b',
-    r'\bavoid\b', r'\btrust\b', r'\bbrand\b', r'\bcategory\b',
-    r'\bselection\b', r'\bvariety\b', r'\boption\b', r'\balternative\b',
-    r'\bbetter than\b', r'\bworse than\b', r'\binstead\b',
-    r'\bzepto\b', r'\binstamart\b', r'\bamazon\b', r'\bswiggy\b',
-    r'\bblinkit\b', r'\bgrofers\b',
-]
-
-# ── Status mapping ─────────────────────────────────────────────────────────────
-
-def score_to_status(score: float) -> str:
-    if score < 0.20:
-        return 'excluded_operational'
-    elif score < 0.40:
-        return 'archived'
-    elif score < 0.60:
-        return 'low_relevance'
-    elif score < 0.80:
-        return 'relevant'
-    else:
-        return 'core_evidence'
-
-# ── Sub-stage A: Rule-based pre-filter ────────────────────────────────────────
-
-def _is_operational_only(text: str) -> bool:
-    """
-    Returns True if the text matches operational patterns AND has no behavioral keywords.
-    """
-    text_lower = text.lower()
-    has_operational = any(re.search(p, text_lower) for p in OPERATIONAL_PATTERNS)
-    if not has_operational:
-        return False
-    has_behavioral = any(re.search(k, text_lower) for k in BEHAVIORAL_KEYWORDS)
-    return not has_behavioral
+supabase = create_client(
+    os.environ["SUPABASE_URL"],
+    os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+)
 
 
-def apply_rule_filter(reviews: list) -> tuple[list, list]:
-    """
-    Separates reviews into (to_score, excluded).
-    Mutates excluded with status='excluded_operational'.
-    """
-    to_score = []
-    excluded = []
+# ─────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────
 
-    for r in reviews:
-        text = r.get('cleaned_text') or r.get('raw_text') or ''
-        word_count = r.get('word_count', len(text.split()))
-
-        if word_count < 15:
-            r['_new_status'] = 'excluded_operational'
-            r['_reason'] = 'word_count < 15'
-            excluded.append(r)
-        elif _is_operational_only(text):
-            r['_new_status'] = 'excluded_operational'
-            r['_reason'] = 'operational_only_pattern'
-            excluded.append(r)
-        else:
-            to_score.append(r)
-
-    return to_score, excluded
+def fetch_all(table: str, columns: str = "*") -> list:
+    all_data, page, size = [], 0, 1000
+    while True:
+        start = page * size
+        resp = supabase.table(table).select(columns).range(start, start + size - 1).execute()
+        data = resp.data or []
+        all_data.extend(data)
+        if len(data) < size:
+            break
+        page += 1
+    return all_data
 
 
-# ── Sub-stage B: LLM batch scoring ────────────────────────────────────────────
-
-async def score_batch(batch: list) -> list:
-    """
-    Score a batch of up to BATCH_SIZE reviews using Gemini.
-    Returns the batch with _signal_score and _signal_rationale set.
-    """
-    prompt = build_scoring_prompt([
-        {
-            'text': (r.get('cleaned_text') or r.get('raw_text') or '')[:800],
-            'source': r.get('source', 'unknown'),
-            'rating': r.get('rating', 'N/A'),
-            'date': str(r.get('review_date', 'unknown')),
-        }
-        for r in batch
-    ])
-
-    try:
-        result = await call_llm_async(prompt)
-
-        # result should be a list of {signal_score, rationale}
-        if not isinstance(result, list):
-            raise ValueError(f"Expected list, got {type(result)}")
-
-        for i, r in enumerate(batch):
-            if i < len(result):
-                item = result[i]
-                r['_signal_score'] = float(item.get('signal_score', 0.5))
-                r['_signal_rationale'] = str(item.get('rationale', ''))
-                r['_new_status'] = score_to_status(r['_signal_score'])
-            else:
-                # Partial response fallback
-                r['_signal_score'] = 0.5
-                r['_signal_rationale'] = 'Partial LLM response — default score assigned'
-                r['_new_status'] = 'low_relevance'
-
-    except Exception as e:
-        print(f"    [Score] Batch error: {e}. Assigning default scores.")
-        for r in batch:
-            r['_signal_score'] = 0.5
-            r['_signal_rationale'] = f'LLM error: {str(e)[:100]}'
-            r['_new_status'] = 'low_relevance'
-
-    return batch
+def pct(count: int, total: int) -> float:
+    return round((count / total) * 100, 1) if total else 0.0
 
 
-# ── Database helpers ───────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# Compute scores (pure Python, zero LLM calls)
+# ─────────────────────────────────────────────
 
-def _update_review(review_id: str, updates: dict):
-    supabase.table("raw_reviews").update(updates).eq("id", review_id).execute()
+def compute_scores(annotations: list) -> dict:
+    # Skip annotation failures
+    valid = [a for a in annotations if not a.get("annotation_failed")]
+    total = len(valid)
+
+    driver_counts   = Counter(a["decision_driver"]          for a in valid if a.get("decision_driver"))
+    context_counts  = Counter(a["purchase_context"]         for a in valid if a.get("purchase_context"))
+    evidence_counts = Counter(a["decision_evidence_type"]   for a in valid if a.get("decision_evidence_type"))
+    segment_counts  = Counter(a["inferred_segment"]         for a in valid if a.get("inferred_segment"))
+    conf_counts     = Counter(a["confidence"]               for a in valid if a.get("confidence"))
+
+    # Categories mentioned is a list field — flatten all lists
+    all_cats = []
+    for a in valid:
+        cats = a.get("categories_mentioned") or []
+        all_cats.extend(cats)
+    category_counts = Counter(all_cats)
+
+    # Cross-pattern: decision_driver × purchase_context
+    cross: Counter = Counter()
+    for a in valid:
+        d = a.get("decision_driver") or "none"
+        c = a.get("purchase_context") or "none"
+        cross[(d, c)] += 1
+
+    top_cross = [
+        {"driver": k[0], "context": k[1], "count": v, "pct": pct(v, total)}
+        for k, v in cross.most_common(10)
+    ]
+
+    def to_list(counter, limit=None):
+        items = counter.most_common(limit)
+        return [{"key": k, "count": v, "pct": pct(v, total)} for k, v in items]
+
+    return {
+        "total_annotations":      total,
+        "decision_driver":        to_list(driver_counts),
+        "purchase_context":       to_list(context_counts),
+        "decision_evidence_type": to_list(evidence_counts),
+        "inferred_segment":       to_list(segment_counts),
+        "confidence":             to_list(conf_counts),
+        "categories_mentioned":   to_list(category_counts, 15),
+        "cross_patterns":         top_cross,
+    }
 
 
-def _flush_excluded(excluded: list):
-    """Write rule-excluded rows to DB immediately — no LLM cost."""
-    for r in excluded:
-        _update_review(r['id'], {
-            'status': 'excluded_operational',
-            'signal_score': 0.0,
-            'signal_rationale': r.get('_reason', 'rule-based exclusion'),
+# ─────────────────────────────────────────────
+# Pretty-print preview
+# ─────────────────────────────────────────────
+
+def print_preview(scores: dict):
+    total = scores["total_annotations"]
+    sep   = "─" * 56
+
+    print()
+    print("=" * 62)
+    print("  STAGE 4 — SIGNAL SCORING PREVIEW")
+    print("=" * 62)
+    print(f"  Total valid annotations : {total}")
+    print()
+
+    sections = [
+        ("TOP DECISION DRIVERS",        scores["decision_driver"][:8]),
+        ("TOP PURCHASE CONTEXTS",       scores["purchase_context"]),
+        ("DECISION EVIDENCE TYPES",     scores["decision_evidence_type"]),
+        ("INFERRED USER SEGMENTS",      scores["inferred_segment"]),
+        ("CATEGORIES MENTIONED",        scores["categories_mentioned"][:10]),
+        ("CONFIDENCE DISTRIBUTION",     scores["confidence"]),
+    ]
+
+    for title, rows in sections:
+        print(f"  {title}")
+        print(f"  {sep}")
+        for i, row in enumerate(rows, 1):
+            bar = "█" * max(1, int(row["pct"] / 2))
+            print(f"  {i:>2}. {row['key']:<35} {row['count']:>4}  ({row['pct']:>5.1f}%)  {bar}")
+        print()
+
+    print("  TOP CROSS-PATTERNS  (Decision Driver × Purchase Context)")
+    print(f"  {sep}")
+    for i, cp in enumerate(scores["cross_patterns"], 1):
+        print(f"  {i:>2}. {cp['driver']:<30} × {cp['context']:<25} {cp['count']:>4}")
+    print()
+
+
+# ─────────────────────────────────────────────
+# Save to Supabase signal_scores table
+# ─────────────────────────────────────────────
+
+def save_scores(scores: dict, run_id: str):
+    rows = []
+
+    for dim in ["decision_driver", "purchase_context",
+                "decision_evidence_type", "inferred_segment",
+                "confidence", "categories_mentioned"]:
+        for entry in scores[dim]:
+            rows.append({
+                "run_id":      run_id,
+                "signal_type": dim,
+                "signal_key":  entry["key"],
+                "signal_key2": None,
+                "count":       entry["count"],
+                "percentage":  entry["pct"],
+            })
+
+    for cp in scores["cross_patterns"]:
+        rows.append({
+            "run_id":      run_id,
+            "signal_type": "cross_pattern",
+            "signal_key":  cp["driver"],
+            "signal_key2": cp["context"],
+            "count":       cp["count"],
+            "percentage":  cp["pct"],
         })
 
+    # Insert in chunks of 100
+    for i in range(0, len(rows), 100):
+        supabase.table("signal_scores").insert(rows[i: i + 100]).execute()
 
-def _flush_scored(scored: list):
-    """Write LLM-scored rows to DB."""
-    for r in scored:
-        _update_review(r['id'], {
-            'status': r['_new_status'],
-            'signal_score': r['_signal_score'],
-            'signal_rationale': r['_signal_rationale'],
-        })
+    print(f"  Saved {len(rows)} signal score rows to Supabase.")
 
 
-def _update_run_progress(run_id: str, done: int, total: int):
-    try:
-        supabase.table("pipeline_runs").update({
-            "stage_progress": {"score": {"done": done, "total": total}}
-        }).eq("id", run_id).execute()
-    except Exception:
-        pass  # Non-critical
+# ─────────────────────────────────────────────
+# Main (interactive gate)
+# ─────────────────────────────────────────────
+
+def main():
+    print("\nFetching annotations from database...")
+    annotations = fetch_all("chunk_annotations")
+    print(f"  Loaded {len(annotations)} annotation rows.")
+
+    scores = compute_scores(annotations)
+
+    # Determine the dominant run_id
+    run_ids = Counter(a.get("run_id") for a in annotations if a.get("run_id"))
+    run_id  = run_ids.most_common(1)[0][0] if run_ids else "unknown"
+
+    print_preview(scores)
+
+    print("=" * 62)
+    answer = input("  Press ENTER to save scores to DB, or type 'n' to abort: ").strip().lower()
+    if answer == "n":
+        print("  Aborted. Nothing saved.")
+        sys.exit(0)
+
+    save_scores(scores, run_id)
+    print("  Stage 4 complete. You can now run Stage 5 (synthesize.py).")
+    print("=" * 62)
 
 
-# ── Main entry point ───────────────────────────────────────────────────────────
-
-async def run_stage_2(run_id: str):
-    """
-    Run Stage 2 Signal Scoring on all pending reviews for the given run_id.
-    """
-    print(f"Starting Stage 2 (Signal Scoring) for run: {run_id}")
-
-    # Fetch all pending reviews for this run
-    response = (
-        supabase.table("raw_reviews")
-        .select("id, raw_text, cleaned_text, word_count, rating, review_date, source, status")
-        .eq("run_id", run_id)
-        .eq("status", "pending")
-        .execute()
-    )
-    pending = response.data or []
-    print(f"  Found {len(pending)} pending reviews.")
-
-    if not pending:
-        print("  Nothing to score. Stage 2 complete.")
-        return
-
-    # Sub-stage A: Rule-based filter
-    to_score, excluded = apply_rule_filter(pending)
-    print(f"  Rule filter: {len(excluded)} excluded, {len(to_score)} sent to LLM.")
-
-    _flush_excluded(excluded)
-
-    # Sub-stage B: LLM batch scoring
-    total = len(to_score)
-    done = 0
-    batches = [to_score[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
-    print(f"  Scoring {total} reviews in {len(batches)} batches of {BATCH_SIZE}...")
-
-    for batch_num, batch in enumerate(batches, 1):
-        print(f"  Batch {batch_num}/{len(batches)}...", end=" ", flush=True)
-        scored_batch = await score_batch(batch)
-        _flush_scored(scored_batch)
-        done += len(scored_batch)
-        print(f"done. ({done}/{total} scored)")
-        _update_run_progress(run_id, done, total)
-
-        if batch_num < len(batches):
-            await asyncio.sleep(BATCH_DELAY_SECONDS)
-
-    print(f"Stage 2 complete. {len(excluded)} rule-excluded, {done} LLM-scored.")
-
-
-if __name__ == '__main__':
-    import uuid
-
-    # Find the most recent pipeline_run or create a test one
-    try:
-        runs = supabase.table("pipeline_runs").select("id").order("created_at", desc=True).limit(1).execute()
-        if runs.data:
-            run_id = runs.data[0]['id']
-            print(f"Using existing run: {run_id}")
-        else:
-            run_id = str(uuid.uuid4())
-            supabase.table("pipeline_runs").insert({"id": run_id, "mode": "live", "status": "running"}).execute()
-            print(f"Created new run: {run_id}")
-    except Exception as e:
-        run_id = str(uuid.uuid4())
-        print(f"Could not query runs ({e}), using new run_id: {run_id}")
-
-    asyncio.run(run_stage_2(run_id))
+if __name__ == "__main__":
+    main()

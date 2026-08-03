@@ -9,6 +9,8 @@ PULLPUSH_URLS = [
 ]
 ARCTIC_SHIFT_URL = "https://arctic-shift.photon-reddit.com/api/posts/search"
 
+# Configuration flag to manage aggressive PullPush rate-limiting
+USE_PULLPUSH_PRIMARY = False
 DEFAULT_SUBREDDITS = [
     "india",
     "bangalore",
@@ -16,12 +18,26 @@ DEFAULT_SUBREDDITS = [
     "mumbai",
     "blinkit",
     "zepto",
-    "quickcommerce"
+    "quickcommerce",
+    "IndiaInvestments",
+    "AskIndia",
+    "onlinegroceries"
 ]
 
 DEFAULT_SEARCH_TERMS = [
-    "Blinkit",
-    "blinkit"
+    "Blinkit vs Zepto",
+    "Blinkit vs Swiggy Instamart",
+    "switched from Blinkit",
+    "stopped using Blinkit",
+    "moved to Blinkit",
+    "why I use Blinkit",
+    "Blinkit worth it",
+    "Blinkit for groceries",
+    "ordering from Blinkit",
+    "Blinkit medicine",
+    "Blinkit electronics",
+    "Blinkit fresh",
+    "Blinkit"
 ]
 
 USER_AGENT = "blinkit-discovery-engine:v1.0 (academic research)"
@@ -65,9 +81,10 @@ def _pullpush_request(session: requests.Session, params: Dict[str, Any], max_ret
     return [], None
 
 def _arctic_shift_request(session: requests.Session, subreddit: str, query: str, max_retries: int = 3):
+    # NOTE: Arctic Shift API uses 'query' not 'q'. Using 'q' returns HTTP 400.
     params = {
         "subreddit": subreddit,
-        "q": query,
+        "query": query,      # FIX: was "q" — Arctic Shift rejects unknown param 'q'
         "limit": 100,
         "sort": "desc",
         "fields": "id,title,selftext,created_utc,score,num_comments,author,subreddit"
@@ -153,13 +170,19 @@ def fetch(start_date: Optional[datetime] = None, end_date: Optional[datetime] = 
                 "size": min(100, limit - len(formatted_records))
             }
 
-            raw_data, endpoint = _pullpush_request(session, params)
+            if USE_PULLPUSH_PRIMARY:
+                raw_data, endpoint = _pullpush_request(session, params)
+            else:
+                raw_data = None
 
             if raw_data:
                 source_stats['pullpush'] += len(raw_data)
                 print(f"    [Pullpush] Got {len(raw_data)} results.")
             else:
-                print(f"    [Pullpush] No results - trying Arctic Shift fallback...")
+                if USE_PULLPUSH_PRIMARY:
+                    print(f"    [Pullpush] No results - trying Arctic Shift fallback...")
+                else:
+                    print(f"    [Config] Bypassing PullPush, trying Arctic Shift primary...")
                 raw_data = _arctic_shift_request(session, sub, query)
                 if raw_data:
                     source_stats['arctic_shift'] += len(raw_data)
@@ -219,7 +242,8 @@ def fetch(start_date: Optional[datetime] = None, end_date: Optional[datetime] = 
                         "score": s['score'],
                         "num_comments": s['num_comments'],
                         "author": s['author'],
-                        "created_utc": created_utc
+                        "created_utc": created_utc,
+                        "query": query
                     }
                 }
                 formatted_records.append(record)

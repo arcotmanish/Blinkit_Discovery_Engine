@@ -1,14 +1,24 @@
-import asyncio
-import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import asyncio
+from dotenv import load_dotenv
+
+# Load env variables from .env
+load_dotenv()
 
 from utils.llm import call_llm_async
 
-async def test():
-    prompt = """Return ONLY valid JSON. No explanation. No markdown:
-[{"signal_score": 0.75, "rationale": "API connectivity test."}]"""
-    result = await call_llm_async(prompt)
-    print("Gemini API test:", result)
+async def main():
+    print("Testing new Groq API Key...")
+    print(f"Key loaded: {os.getenv('GROQ_API_KEY')[:8]}...")
+    
+    prompt = "Please respond with a simple JSON object like this: {\"status\": \"success\"}. Do not output any markdown."
+    
+    try:
+        result = await call_llm_async(prompt)
+        print("Success! LLM responded with:")
+        print(result)
+    except Exception as e:
+        print(f"Failed: {e}")
 
-asyncio.run(test())
+if __name__ == "__main__":
+    asyncio.run(main())

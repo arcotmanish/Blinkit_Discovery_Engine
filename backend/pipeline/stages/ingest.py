@@ -9,25 +9,36 @@ from db.client import supabase
 from scrapers import play_store, app_store, reddit
 from utils.text import clean_text, count_words, hash_text, detect_language
 
-def run_stage_1(run_id: str, mode: str = 'live'):
+def run_stage_1(run_id: str, mode: str = 'live', allowed_sources: List[str] = None):
     """
     Run Stage 1 Ingestion: Scrape, Clean, Hash, Detect Lang, Insert.
-    Mode 'live' fetches 50, mode 'demo' fetches 700.
+    Mode 'production' fetches thousands, 'demo' 700, 'live' 50.
     """
-    limit = 700 if mode == 'demo' else 50
+    print(f"Starting Stage 1 (Ingest) - mode: {mode}")
     
-    print(f"Starting Stage 1 (Ingest) - mode: {mode}, limit per source: {limit}")
+    if mode == 'production':
+        source_limits = {'play_store': 5000, 'app_store': 500, 'reddit': 1500}
+    elif mode == 'demo':
+        source_limits = {'play_store': 700, 'app_store': 700, 'reddit': 700}
+    else:
+        source_limits = {'play_store': 50, 'app_store': 50, 'reddit': 50}
     
-    sources = [
-        ('play_store', play_store.fetch),
-        ('app_store', app_store.fetch),
-        ('reddit', reddit.fetch)
-    ]
+    all_sources = {
+        'play_store': play_store.fetch,
+        'app_store': app_store.fetch,
+        'reddit': reddit.fetch
+    }
     
-    stats = {'play_store': 0, 'app_store': 0, 'reddit': 0, 'duplicates_skipped': 0, 'non_english': 0}
+    if not allowed_sources:
+        allowed_sources = list(all_sources.keys())
+        
+    sources = [(k, v) for k, v in all_sources.items() if k in allowed_sources]
+    
+    stats = {'play_store': 0, 'app_store': 0, 'reddit': 0, 'duplicates_skipped': 0, 'non_english': 0, 'excluded_short': 0}
     
     for source_name, fetch_func in sources:
-        print(f"Fetching from {source_name}...")
+        limit = source_limits.get(source_name, 100)
+        print(f"Fetching from {source_name} with limit {limit}...")
         try:
             records = fetch_func(limit=limit)
         except Exception as e:
@@ -43,13 +54,21 @@ def run_stage_1(run_id: str, mode: str = 'live'):
             wc = count_words(cleaned)
             
             chash = hash_text(cleaned)
-            lang = detect_language(cleaned)
             
             status = 'pending'
-            if lang != 'en':
-                status = 'non_english'
-                stats['non_english'] += 1
-                
+            if wc < 10:
+                # Too short to contain meaningful behavioral signal.
+                # The signal scoring stage also has a < 15 word rule, but filtering
+                # here saves API quota by never sending these to scoring at all.
+                # Threshold is 10 (not 15) to be conservative — see Architecture P6.
+                status = 'excluded_short'
+                stats['excluded_short'] += 1
+                lang = 'unknown'
+            else:
+                lang = detect_language(cleaned)
+                if lang != 'en':
+                    status = 'non_english'
+                    stats['non_english'] += 1
             review_date = r.get('review_date')
             if review_date:
                 review_date = str(review_date)
