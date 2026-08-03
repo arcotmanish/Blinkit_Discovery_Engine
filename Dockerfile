@@ -1,4 +1,4 @@
-FROM node:20-bullseye-slim
+FROM node:20-bookworm-slim
 
 # Install Python and build dependencies
 RUN apt-get update && apt-get install -y \
@@ -11,7 +11,7 @@ WORKDIR /app
 
 # Setup Python Backend
 COPY backend/requirements.txt /app/backend/
-RUN pip3 install -r /app/backend/requirements.txt
+RUN pip3 install --break-system-packages -r /app/backend/requirements.txt
 COPY backend /app/backend
 
 # Setup Node.js Frontend
