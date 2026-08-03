@@ -1,4 +1,4 @@
-import { supabase } from "./lib/supabase.ts";
+import { supabase } from "./lib/supabase";
 
 async function fetchAll(table: string, columns: string = "*", runId?: string | null) {
   let all: any[] = [];
